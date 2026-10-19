@@ -10,6 +10,7 @@
 <meta name="apple-mobile-web-app-title" content="Plate Log">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <style>
 :root{
   --bg:#f6f3ec; --card:#ffffff; --ink:#1d2a22; --muted:#6b776f; --line:#e4e0d6;
@@ -136,7 +137,10 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
 <main>
   <div class="top">
     <h1 class="brand">Plate Log</h1>
-    <button class="ghost" id="openSettings" style="width:auto;margin:0;padding:7px 12px">Goal</button>
+    <div style="display:flex;gap:8px">
+      <button class="ghost" id="syncBtn" style="width:auto;margin:0;padding:7px 12px">Sync</button>
+      <button class="ghost" id="openSettings" style="width:auto;margin:0;padding:7px 12px">Goal</button>
+    </div>
   </div>
 
   <div class="layout">
@@ -235,6 +239,26 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
   </div>
 </dialog>
 
+<!-- Sync sheet -->
+<dialog id="syncDlg" class="sheet" aria-labelledby="syncTitle">
+  <div class="sheet-top">
+    <h3 id="syncTitle">Sync across devices</h3>
+    <button class="icon" id="syncClose" aria-label="Close">×</button>
+  </div>
+  <div id="syncSignedOut">
+    <p class="meta" style="margin:0 0 8px">Enter your email. We send a sign-in link. Open it on this device, and your diary will stay in sync with your other devices.</p>
+    <form id="syncForm">
+      <label>Email<input id="syncEmail" type="email" required autocomplete="email"></label>
+      <button class="primary" type="submit">Send sign-in link</button>
+    </form>
+  </div>
+  <div id="syncSignedIn" hidden>
+    <p class="meta" style="margin:0 0 8px">Signed in as <b id="syncWho"></b>. Changes sync automatically.</p>
+    <button class="ghost" id="syncOut" style="margin-top:12px">Sign out on this device</button>
+  </div>
+  <p class="meta" id="syncStatus" style="margin-top:12px"></p>
+</dialog>
+
 <!-- Goal sheet -->
 <dialog id="settings" class="sheet" aria-labelledby="settingsTitle">
   <div class="sheet-top">
@@ -249,6 +273,8 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
 const KEY = 'platelog.v1';
 const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
 const HISTORY_DAYS = 30; // days kept, today included
+const SUPABASE_URL = 'https://nhkygkbhiuimkrjmnssg.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oa3lna2JoaXVpbWtyam1uc3NnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MDg4ODAsImV4cCI6MjEwNzk4NDg4MH0.p-J8BK4RrP2d3DNM_hOrnKWA00MaStJqUlfKxCN2Qpc'; // public anon key; row rules protect the data
 const $ = s => document.querySelector(s);
 const r = x => Math.round(x);
 
@@ -262,7 +288,7 @@ let stream = null, scanTimer = null;
 function load() {
   let v = null;
   try { v = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
-  const d = (v && v.days && v.goal) ? v : { goal: 2000, days: {} };
+  const d = (v && v.days && v.goal) ? v : { goal: 2000, days: {}, updatedAt: 0 };
   prune(d);
   return d;
 }
@@ -273,8 +299,10 @@ function prune(d) {
 }
 function save() {
   prune(db);
+  db.updatedAt = Date.now(); // used to decide which copy is newer when syncing
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
   catch (e) { toast('Could not save on this device'); }
+  pushSoon();
 }
 function day(d) { return db.days[d] || (db.days[d] = { entries: [] }); }
 
@@ -715,6 +743,76 @@ function stopScan() {
 }
 
 $('#scanStart').onclick = startScan;
+
+/* ---------- sync across devices (Supabase) ---------- */
+// Whole-diary sync: the newest copy wins. Entries are saved on this device first, so the app works offline.
+const SB = (typeof supabase !== 'undefined')
+  ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
+  : null;
+let user = null, pushTimer = null;
+const syncDlg = $('#syncDlg');
+
+function setSyncStatus(t) { $('#syncStatus').textContent = t; }
+
+function pushSoon() {
+  if (!SB || !user) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(pushNow, 800);
+}
+
+async function pushNow() {
+  if (!SB || !user) return;
+  const { error } = await SB.from('diaries').upsert({ user_id: user.id, data: db, updated_at: new Date().toISOString() });
+  setSyncStatus(error ? 'Sync failed: ' + error.message : 'Synced just now');
+}
+
+async function pullOrPush() {
+  setSyncStatus('Syncing…');
+  const { data, error } = await SB.from('diaries').select('data').eq('user_id', user.id).maybeSingle();
+  if (error) { setSyncStatus('Sync failed: ' + error.message); return; }
+  const remote = data && data.data;
+  if (remote && remote.days && (remote.updatedAt || 0) > (db.updatedAt || 0)) {
+    db = remote;
+    prune(db);
+    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {}
+    render();
+    setSyncStatus('Loaded your diary from the cloud');
+  } else {
+    await pushNow();
+  }
+}
+
+function updateSyncUI() {
+  $('#syncBtn').textContent = user ? 'Synced' : 'Sync';
+  $('#syncSignedOut').hidden = !!user;
+  $('#syncSignedIn').hidden = !user;
+  if (user) $('#syncWho').textContent = user.email || '';
+}
+
+if (SB) {
+  SB.auth.onAuthStateChange((event, session) => {
+    user = session ? session.user : null;
+    updateSyncUI();
+    if (user && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) pullOrPush();
+  });
+  $('#syncForm').onsubmit = async e => {
+    e.preventDefault();
+    const email = $('#syncEmail').value.trim();
+    if (!email) return;
+    setSyncStatus('Sending the sign-in link…');
+    const { error } = await SB.auth.signInWithOtp({ email, options: { emailRedirectTo: location.href.split('#')[0] } });
+    setSyncStatus(error ? 'Could not send: ' + error.message : 'Check your email and open the link on this device.');
+  };
+  $('#syncOut').onclick = async () => {
+    await SB.auth.signOut();
+    setSyncStatus('Signed out. This device keeps its own copy.');
+  };
+} else {
+  $('#syncBtn').disabled = true;
+  $('#syncBtn').textContent = 'Sync off';
+}
+$('#syncBtn').onclick = () => syncDlg.showModal();
+$('#syncClose').onclick = () => syncDlg.close();
 
 /* ---------- date nav, goal, fab ---------- */
 $('#prev').onclick = () => shift(-1);
