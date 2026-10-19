@@ -7,6 +7,9 @@
 <meta name="theme-color" content="#f6f3ec">
 <title>Plate Log</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d2a22'/%3E%3Ccircle cx='32' cy='32' r='21' fill='%23e4572e'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%23f6f3ec'/%3E%3C/svg%3E">
+<meta name="apple-mobile-web-app-title" content="Plate Log">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
 :root{
   --bg:#f6f3ec; --card:#ffffff; --ink:#1d2a22; --muted:#6b776f; --line:#e4e0d6;
@@ -161,7 +164,7 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
     </div>
 
     <div id="tab-scan">
-      <video id="video" playsinline muted></video>
+      <div id="reader"></div>
       <p class="meta" id="scanMsg" style="margin:10px 0">Point the camera at the barcode.</p>
       <button class="ghost" id="scanStart" style="margin-top:0">Start camera</button>
     </div>
@@ -522,33 +525,57 @@ $('#customForm').onsubmit = e => {
 };
 
 /* ---------- camera barcode scan (BarcodeDetector where supported) ---------- */
+// html5-qrcode reads the camera itself and works on iPhone Safari as well as Android Chrome,
+// unlike the BarcodeDetector API, which iPhone does not support.
+let scanner = null;
+function scanFormats() {
+  return [
+    Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E
+  ];
+}
+
 async function startScan() {
   const msg = $('#scanMsg');
-  if (!('BarcodeDetector' in window)) {
-    msg.textContent = 'Camera scanning is not supported in this browser. Use the Barcode tab and type the number.';
+  if (typeof Html5Qrcode === 'undefined') {
+    msg.textContent = 'The scanner could not load. Check your connection, or use the Barcode tab.';
     return;
   }
-  try {
-    const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-    const video = $('#video');
-    video.srcObject = stream;
-    await video.play();
-    msg.textContent = 'Point the camera at the barcode.';
-    scanTimer = setInterval(async () => {
-      try {
-        const codes = await detector.detect(video);
-        if (codes.length) {
-          stopScan();
-          msg.textContent = 'Found ' + codes[0].rawValue + ', looking it up…';
-          pickOrFail(codes[0].rawValue);
-        }
-      } catch (e) {}
-    }, 400);
-  } catch (err) {
-    msg.textContent = 'Camera unavailable (' + err.name + '). Use the Barcode tab instead.';
-    stopScan();
+  if (!window.isSecureContext) {
+    msg.textContent = 'The camera only works on an https:// address. Open the GitHub Pages link.';
+    return;
   }
+  if (scanner) return;
+  scanner = new Html5Qrcode('reader', { formatsToSupport: scanFormats(), verbose: false });
+  msg.textContent = 'Starting camera…';
+  try {
+    await scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 260, height: 140 } },
+      onScanned,
+      () => {} // frames without a code are ignored
+    );
+    msg.textContent = 'Point the camera at the barcode.';
+  } catch (err) {
+    msg.textContent = cameraError(err);
+    await stopScan();
+  }
+}
+
+function onScanned(code) {
+  stopScan();
+  $('#scanMsg').textContent = 'Found ' + code + ', looking it up…';
+  pickOrFail(code);
+}
+
+function cameraError(err) {
+  const s = String((err && (err.name || err.message)) || err);
+  if (/NotAllowed|Permission/i.test(s)) {
+    return 'Camera access is blocked. Allow the camera for this site in your browser settings, then tap Start camera again.';
+  }
+  if (/NotFound|Overconstrained/i.test(s)) return 'No camera was found on this device. Use the Barcode tab.';
+  if (/NotReadable|TrackStart/i.test(s)) return 'The camera is busy in another app. Close it and try again.';
+  return 'The camera could not start. In-app browsers (Instagram, Facebook, Messenger) often block it, so open this page in Safari or Chrome. You can also use the Barcode tab.';
 }
 
 async function pickOrFail(code) {
@@ -559,11 +586,11 @@ async function pickOrFail(code) {
   }
 }
 
-function stopScan() {
-  clearInterval(scanTimer); scanTimer = null;
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-  const v = $('#video');
-  if (v) v.srcObject = null;
+async function stopScan() {
+  if (!scanner) return;
+  const s = scanner;
+  scanner = null;
+  try { if (s.isScanning) await s.stop(); s.clear(); } catch (e) {}
 }
 
 $('#scanStart').onclick = startScan;
