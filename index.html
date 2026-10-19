@@ -561,16 +561,21 @@ async function startScan() {
     return;
   }
   if (scanner) return;
-  scanner = new Html5Qrcode('reader', { formatsToSupport: scanFormats(), verbose: false });
+  scanner = new Html5Qrcode('reader', { formatsToSupport: scanFormats(), verbose: false, useBarCodeDetectorIfSupported: true });
   msg.textContent = 'Starting camera…';
   try {
     await scanner.start(
       { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 260, height: 140 } },
+      {
+        fps: 10,
+        disableFlip: true,
+        // Higher resolution is what lets the decoder read the thin lines of a 1D barcode.
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      },
       onScanned,
       () => {} // frames without a code are ignored
     );
-    msg.textContent = 'Point the camera at the barcode.';
+    msg.textContent = 'Scanning. Hold the barcode 10–20 cm from the camera, in good light, and keep it flat and steady.';
   } catch (err) {
     msg.textContent = cameraError(err);
     await stopScan();
