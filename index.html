@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f6f3ec">
+<title>Plate Log</title>
+<style>
+:root{
+  --bg:#f6f3ec; --card:#ffffff; --ink:#1d2a22; --muted:#6b776f; --line:#e4e0d6;
+  --accent:#e4572e; --accent-ink:#ffffff; --good:#2f7d5b; --over:#b3261e;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:calc(96px + env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px));
+  min-height:100vh;
+}
+main{max-width:560px;margin:0 auto}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+.muted{color:var(--muted)}
+.meta{color:var(--muted);font-size:13px}
+
+/* header */
+.top{display:flex;align-items:center;justify-content:space-between;padding:18px 0 8px}
+.brand{font-size:20px;font-weight:700;letter-spacing:-.01em;margin:0}
+.datebar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 14px}
+.datebar .date{font-weight:600;text-align:center;flex:1}
+.nav{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:var(--card)}
+
+/* summary */
+.summary{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px}
+.big{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.big .num{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.bar{height:10px;background:#efebe2;border-radius:99px;overflow:hidden;margin:14px 0 6px}
+.bar i{display:block;height:100%;width:0;background:var(--good);border-radius:99px;transition:width .3s}
+.bar-note{display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
+.macros{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.macro{background:var(--bg);border-radius:12px;padding:10px;text-align:center}
+.macro b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+.macro span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+
+/* meals */
+.meal{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin-top:12px}
+.meal-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.meal-h h2{font-size:16px;margin:0}
+.meal-h .sub{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.row-main{flex:1;min-width:0}
+.name{font-weight:600;overflow-wrap:anywhere}
+.kc{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.icon{border:0;background:transparent;font-size:20px;width:32px;height:32px;border-radius:8px;color:var(--muted)}
+.ghost{background:transparent;border:1px dashed #cfc9bb;border-radius:10px;padding:9px 12px;width:100%;color:var(--muted);margin-top:6px}
+.empty{color:var(--muted);text-align:center;padding:40px 0;font-size:14px}
+
+/* history strip */
+.sec-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:18px 2px 8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.history{display:flex;gap:6px;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:thin}
+.day{flex:0 0 54px;display:flex;flex-direction:column;align-items:center;gap:1px;padding:8px 0;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+.day .dw{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.day .dn{font-weight:700;font-size:17px}
+.day .dk{font-size:12px;font-variant-numeric:tabular-nums;color:var(--muted)}
+.day.ok .dk{color:var(--good)}
+.day.over .dk{color:var(--over)}
+.day.sel{background:var(--ink);border-color:var(--ink);color:#fff}
+.day.sel .dw,.day.sel .dk{color:#d6ddd8}
+.nav:disabled{opacity:.35;cursor:default}
+
+/* fab */
+.fab{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));
+  background:var(--accent);color:var(--accent-ink);border:0;border-radius:999px;padding:14px 26px;font-weight:700;
+  box-shadow:0 8px 24px rgba(228,87,46,.35)}
+
+/* sheets */
+dialog{border:0;padding:0;background:transparent;color:inherit}
+dialog::backdrop{background:rgba(20,30,24,.4)}
+.sheet{
+  position:fixed;inset:auto 0 0 0;margin:0 auto;width:min(560px,100%);max-height:90vh;overflow:auto;
+  background:var(--card);border-radius:20px 20px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom,0px));
+}
+.sheet-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.sheet-top h3{margin:0;font-size:18px}
+.tabs{display:flex;gap:6px;background:var(--bg);padding:4px;border-radius:12px;margin-bottom:14px}
+.tabs button{flex:1;border:0;background:transparent;padding:8px 4px;border-radius:9px;font-size:14px;color:var(--muted)}
+.tabs button[aria-selected="true"]{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+form.row-form{display:flex;gap:8px}
+input,select{width:100%;padding:11px 12px;border:1px solid #d6d0c2;border-radius:10px;background:#fff}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.btn{border:0;background:var(--ink);color:#fff;border-radius:10px;padding:11px 16px;font-weight:600;white-space:nowrap}
+.primary{width:100%;background:var(--accent);color:var(--accent-ink);border:0;border-radius:12px;padding:14px;font-weight:700;margin-top:12px}
+label{display:block;font-size:13px;color:var(--muted);margin-top:12px}
+label input,label select{margin-top:4px;color:var(--ink);font-size:16px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:12px;background:#111;display:block}
+.result{display:flex;justify-content:space-between;gap:10px;width:100%;text-align:left;background:transparent;border:0;border-top:1px solid var(--line);padding:11px 2px}
+.result .n{font-weight:600}
+.result .k{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px;white-space:nowrap;align-self:center}
+#results{margin-top:6px;max-height:50vh;overflow:auto}
+.note{font-size:12px;color:var(--muted);margin-top:14px;text-align:center}
+.toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);opacity:0;
+  background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;transition:.25s;pointer-events:none;max-width:90%}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <h1 class="brand">Plate Log</h1>
+    <button class="ghost" id="openSettings" style="width:auto;margin:0;padding:7px 12px">Goal</button>
+  </div>
+
+  <div class="datebar">
+    <button class="nav" id="prev" aria-label="Previous day">‹</button>
+    <div class="date" id="date"></div>
+    <button class="nav" id="next" aria-label="Next day">›</button>
+  </div>
+
+  <section class="summary">
+    <div class="big"><span class="num" id="kcal">0</span><span class="muted">kcal eaten</span></div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="bar-note"><span id="goalNote"></span><span id="leftNote"></span></div>
+    <div class="macros">
+      <div class="macro"><b id="mP">0 g</b><span>Protein</span></div>
+      <div class="macro"><b id="mC">0 g</b><span>Carbs</span></div>
+      <div class="macro"><b id="mF">0 g</b><span>Fat</span></div>
+    </div>
+  </section>
+
+  <div class="sec-h"><span>Last 30 days</span><span style="text-transform:none;letter-spacing:0;font-weight:400">tap a day to open it</span></div>
+  <div class="history" id="history"></div>
+
+  <div id="meals"></div>
+  <p class="note">Product data: Open Food Facts contributors, ODbL. Values are per 100 g and scaled to your amount.</p>
+</main>
+
+<button class="fab" id="fab">+ Add food</button>
+<div class="toast" id="toast" role="status"></div>
+
+<!-- Add food sheet -->
+<dialog id="sheet" class="sheet" aria-labelledby="sheetTitle">
+  <div class="sheet-top">
+    <h3 id="sheetTitle">Add food</h3>
+    <button class="icon" id="closeSheet" aria-label="Close">×</button>
+  </div>
+
+  <div id="stepPick">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="scan" aria-selected="true">Scan</button>
+      <button role="tab" data-tab="code" aria-selected="false">Barcode</button>
+      <button role="tab" data-tab="search" aria-selected="false">Search</button>
+      <button role="tab" data-tab="custom" aria-selected="false">Custom</button>
+    </div>
+
+    <div id="tab-scan">
+      <video id="video" playsinline muted></video>
+      <p class="meta" id="scanMsg" style="margin:10px 0">Point the camera at the barcode.</p>
+      <button class="ghost" id="scanStart" style="margin-top:0">Start camera</button>
+    </div>
+
+    <div id="tab-code" hidden>
+      <form class="row-form" id="codeForm">
+        <input id="codeInput" inputmode="numeric" placeholder="Barcode, e.g. 5000159407236" autocomplete="off">
+        <button class="btn" type="submit">Look up</button>
+      </form>
+    </div>
+
+    <div id="tab-search" hidden>
+      <form class="row-form" id="searchForm">
+        <input id="searchInput" placeholder="e.g. greek yogurt" autocomplete="off">
+        <button class="btn" type="submit">Search</button>
+      </form>
+      <div id="results"></div>
+    </div>
+
+    <div id="tab-custom" hidden>
+      <form id="customForm">
+        <label>Name<input id="cName" required placeholder="e.g. Homemade chili"></label>
+        <label>Brand (optional)<input id="cBrand"></label>
+        <label>kcal per 100 g<input id="cKcal" type="number" min="0" step="any" required></label>
+        <div class="grid2">
+          <label>Protein g<input id="cP" type="number" min="0" step="any" value="0"></label>
+          <label>Carbs g<input id="cC" type="number" min="0" step="any" value="0"></label>
+          <label>Fat g<input id="cF" type="number" min="0" step="any" value="0"></label>
+          <label>Serving g<input id="cS" type="number" min="1" step="any" value="100"></label>
+        </div>
+        <button class="primary" type="submit">Continue</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="stepAmount" hidden>
+    <div class="name" id="pName" style="font-size:17px"></div>
+    <div class="meta" id="pMeta" style="margin-bottom:6px"></div>
+    <label>Amount (g)<input id="grams" type="number" inputmode="decimal" min="1" step="any"></label>
+    <label>Meal<select id="mealSel"></select></label>
+    <p class="meta" id="preview" style="margin:12px 0 0"></p>
+    <button class="primary" id="addBtn">Add to diary</button>
+    <button class="ghost" id="backBtn">Back</button>
+  </div>
+</dialog>
+
+<!-- Goal sheet -->
+<dialog id="settings" class="sheet" aria-labelledby="settingsTitle">
+  <div class="sheet-top">
+    <h3 id="settingsTitle">Daily goal</h3>
+    <button class="icon" id="closeSettings" aria-label="Close">×</button>
+  </div>
+  <label>Calories per day<input id="goalInput" type="number" min="500" step="50"></label>
+  <button class="primary" id="saveGoal">Save goal</button>
+</dialog>
+
+<script>
+const KEY = 'platelog.v1';
+const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
+const HISTORY_DAYS = 30; // days kept, today included
+const $ = s => document.querySelector(s);
+const r = x => Math.round(x);
+
+let db = load();
+let viewDate = today();
+let addMeal = 'Lunch';
+let pending = null;
+let stream = null, scanTimer = null;
+
+/* ---------- storage ---------- */
+function load() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
+  const d = (v && v.days && v.goal) ? v : { goal: 2000, days: {} };
+  prune(d);
+  return d;
+}
+// Keep only the last HISTORY_DAYS days (today included); older days are dropped.
+function prune(d) {
+  const cutoff = oldestDay();
+  for (const k of Object.keys(d.days)) if (k < cutoff) delete d.days[k];
+}
+function save() {
+  prune(db);
+  try { localStorage.setItem(KEY, JSON.stringify(db)); }
+  catch (e) { toast('Could not save on this device'); }
+}
+function day(d) { return db.days[d] || (db.days[d] = { entries: [] }); }
+
+/* ---------- dates ---------- */
+function iso(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function today() { return iso(new Date()); }
+function dateLabel(d) {
+  if (d === today()) return 'Today';
+  return new Date(d + 'T12:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function isoOffset(n) {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return iso(d);
+}
+function oldestDay() { return isoOffset(-(HISTORY_DAYS - 1)); }
+function shift(n) {
+  const d = new Date(viewDate + 'T12:00');
+  d.setDate(d.getDate() + n);
+  const next = iso(d);
+  if (next < oldestDay()) { toast('History goes back ' + HISTORY_DAYS + ' days'); return; }
+  if (next > today()) return;
+  viewDate = next;
+  render();
+}
+
+/* ---------- math ---------- */
+function totals(entries) {
+  return entries.reduce((t, e) => {
+    const f = e.grams / 100;
+    t.kcal += e.kcal100 * f; t.p += e.p * f; t.c += e.c * f; t.f += e.f * f;
+    return t;
+  }, { kcal: 0, p: 0, c: 0, f: 0 });
+}
+
+/* ---------- render ---------- */
+function render() {
+  $('#date').textContent = dateLabel(viewDate);
+  const entries = day(viewDate).entries;
+  const t = totals(entries);
+  const goal = db.goal;
+  $('#kcal').textContent = r(t.kcal);
+  $('#goalNote').textContent = 'of ' + goal + ' kcal goal';
+  const over = t.kcal > goal;
+  $('#leftNote').textContent = over ? r(t.kcal - goal) + ' over' : r(goal - t.kcal) + ' left';
+  $('#leftNote').style.color = over ? 'var(--over)' : 'var(--muted)';
+  $('#bar').style.width = Math.min(100, goal ? t.kcal / goal * 100 : 0) + '%';
+  $('#bar').style.background = over ? 'var(--over)' : 'var(--good)';
+  $('#mP').textContent = r(t.p) + ' g';
+  $('#mC').textContent = r(t.c) + ' g';
+  $('#mF').textContent = r(t.f) + ' g';
+  $('#prev').disabled = viewDate <= oldestDay();
+  $('#next').disabled = viewDate >= today();
+  renderHistory();
+
+  const wrap = $('#meals');
+  wrap.replaceChildren();
+  if (!entries.length) {
+    wrap.append(el('p', { className: 'empty', textContent: 'Nothing logged yet. Tap “Add food” to start.' }));
+  }
+  for (const m of MEALS) {
+    const items = entries.filter(e => e.meal === m);
+    const sub = items.length ? r(totals(items).kcal) + ' kcal' : '';
+    wrap.append(el('section', { className: 'meal' }, [
+      el('div', { className: 'meal-h' }, [
+        el('h2', { textContent: m }),
+        el('span', { className: 'sub', textContent: sub })
+      ]),
+      ...items.map(entryRow),
+      el('button', { className: 'ghost', textContent: '+ Add to ' + m.toLowerCase(), onclick: () => openAdd(m) })
+    ]));
+  }
+}
+
+function renderHistory() {
+  const wrap = $('#history');
+  wrap.replaceChildren();
+  for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+    const key = isoOffset(-i);
+    const entries = db.days[key] ? db.days[key].entries : [];
+    const kcal = r(totals(entries).kcal);
+    const state = !entries.length ? '' : kcal > db.goal ? 'over' : 'ok';
+    const d = new Date(key + 'T12:00');
+    const b = el('button', {
+      className: ('day ' + state + (key === viewDate ? ' sel' : '')).trim(),
+      onclick: () => { viewDate = key; render(); }
+    }, [
+      el('span', { className: 'dw', textContent: d.toLocaleDateString(undefined, { weekday: 'short' }) }),
+      el('span', { className: 'dn', textContent: String(d.getDate()) }),
+      el('span', { className: 'dk', textContent: entries.length ? String(kcal) : '–' })
+    ]);
+    b.setAttribute('aria-pressed', String(key === viewDate));
+    b.setAttribute('aria-label', dateLabel(key) + ', ' + (entries.length ? kcal + ' kcal' : 'nothing logged'));
+    wrap.append(b);
+  }
+}
+
+function entryRow(e) {
+  const f = e.grams / 100;
+  return el('div', { className: 'row' }, [
+    el('div', { className: 'row-main' }, [
+      el('div', { className: 'name', textContent: e.name }),
+      el('div', { className: 'meta', textContent: (e.brand ? e.brand + ' · ' : '') + e.grams + ' g · P ' + r(e.p * f) + ' C ' + r(e.c * f) + ' F ' + r(e.f * f) })
+    ]),
+    el('div', { className: 'kc', textContent: r(e.kcal100 * f) }),
+    el('button', {
+      className: 'icon', textContent: '×', title: 'Remove', 'aria-label': 'Remove ' + e.name,
+      onclick: () => {
+        const d = day(viewDate);
+        d.entries = d.entries.filter(x => x.id !== e.id);
+        save(); render();
+      }
+    })
+  ]);
+}
+
+function el(tag, props = {}, kids = []) {
+  const n = document.createElement(tag);
+  Object.assign(n, props);
+  for (const k of [].concat(kids)) if (k != null) n.append(k);
+  return n;
+}
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove('on'), 1800);
+}
+
+/* ---------- add flow ---------- */
+const sheet = $('#sheet');
+
+function openAdd(meal) {
+  addMeal = meal || 'Lunch';
+  showStep('pick');
+  showTab('scan');
+  sheet.showModal();
+}
+
+function showStep(step) {
+  $('#stepPick').hidden = step !== 'pick';
+  $('#stepAmount').hidden = step !== 'amount';
+  $('#sheetTitle').textContent = step === 'pick' ? 'Add food' : 'Amount';
+}
+
+function showTab(name) {
+  if (name !== 'scan') stopScan();
+  for (const b of document.querySelectorAll('.tabs button')) {
+    b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  }
+  for (const t of ['scan', 'code', 'search', 'custom']) $('#tab-' + t).hidden = t !== name;
+}
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+function pickProduct(p) {
+  pending = p;
+  stopScan();
+  $('#pName').textContent = p.name;
+  $('#pMeta').textContent = (p.brand ? p.brand + ' · ' : '') + 'per 100 g: ' + r(p.kcal100) + ' kcal · P ' + r(p.p) + ' C ' + r(p.c) + ' F ' + r(p.f);
+  $('#grams').value = p.serving || 100;
+  const sel = $('#mealSel');
+  sel.replaceChildren(...MEALS.map(m => el('option', { value: m, textContent: m, selected: m === addMeal })));
+  updatePreview();
+  showStep('amount');
+  setTimeout(() => $('#grams').focus(), 50);
+}
+
+function updatePreview() {
+  const g = parseFloat($('#grams').value);
+  if (!pending || !(g > 0)) { $('#preview').textContent = ''; return; }
+  $('#preview').textContent = 'That is ' + r(pending.kcal100 * g / 100) + ' kcal';
+}
+$('#grams').addEventListener('input', updatePreview);
+
+$('#backBtn').onclick = () => showStep('pick');
+$('#closeSheet').onclick = () => { stopScan(); sheet.close(); };
+sheet.addEventListener('close', stopScan);
+
+$('#addBtn').onclick = () => {
+  const g = parseFloat($('#grams').value);
+  if (!(g > 0)) return toast('Enter an amount in grams');
+  day(viewDate).entries.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    meal: $('#mealSel').value,
+    name: pending.name, brand: pending.brand,
+    kcal100: pending.kcal100, p: pending.p, c: pending.c, f: pending.f,
+    grams: g
+  });
+  save(); render();
+  sheet.close();
+  toast('Added to ' + $('#mealSel').value.toLowerCase());
+};
+
+/* ---------- barcode lookup (Open Food Facts) ---------- */
+function toProduct(x) {
+  const n = x.nutriments || {};
+  let kcal = n['energy-kcal_100g'];
+  if (kcal == null && n['energy_100g'] != null) kcal = n['energy_100g'] / 4.184; // kJ -> kcal
+  return {
+    code: x.code || '',
+    name: x.product_name || 'Unnamed product',
+    brand: (x.brands || '').split(',')[0].trim(),
+    kcal100: +kcal || 0,
+    p: +n.proteins_100g || 0,
+    c: +n.carbohydrates_100g || 0,
+    f: +n.fat_100g || 0,
+    serving: parseFloat(x.serving_size) || 0
+  };
+}
+
+async function lookupCode(code) {
+  const clean = String(code).replace(/\D/g, '');
+  if (clean.length < 8) throw new Error('That does not look like a barcode');
+  const res = await fetch('https://world.openfoodfacts.org/api/v2/product/' + clean + '.json?fields=code,product_name,brands,serving_size,nutriments');
+  const j = await res.json();
+  if (j.status !== 1 || !j.product) throw new Error('Not found. Add it under Custom.');
+  return toProduct(j.product);
+}
+
+async function searchProducts(q) {
+  const url = 'https://world.openfoodfacts.org/cgi/search.pl?search_simple=1&action=process&json=1&page_size=25' +
+    '&fields=code,product_name,brands,serving_size,nutriments&search_terms=' + encodeURIComponent(q);
+  const res = await fetch(url);
+  const j = await res.json();
+  return (j.products || []).map(toProduct).filter(p => p.kcal100 > 0);
+}
+
+$('#codeForm').onsubmit = async e => {
+  e.preventDefault();
+  try { pickProduct(await lookupCode($('#codeInput').value)); }
+  catch (err) { toast(err.message || 'Lookup failed'); }
+};
+
+$('#searchForm').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('#searchInput').value.trim();
+  if (!q) return;
+  const box = $('#results');
+  box.replaceChildren(el('p', { className: 'meta', textContent: 'Searching…', style: 'padding:10px 2px' }));
+  try {
+    const list = await searchProducts(q);
+    box.replaceChildren();
+    if (!list.length) box.append(el('p', { className: 'meta', textContent: 'No matches with calorie data.', style: 'padding:10px 2px' }));
+    for (const p of list) {
+      box.append(el('button', { className: 'result', onclick: () => pickProduct(p) }, [
+        el('span', { className: 'n', textContent: p.name + (p.brand ? ' · ' + p.brand : '') }),
+        el('span', { className: 'k', textContent: r(p.kcal100) + ' kcal/100g' })
+      ]));
+    }
+  } catch (err) {
+    box.replaceChildren(el('p', { className: 'meta', textContent: 'Search failed. Check your connection.', style: 'padding:10px 2px' }));
+  }
+};
+
+$('#customForm').onsubmit = e => {
+  e.preventDefault();
+  pickProduct({
+    code: '',
+    name: $('#cName').value.trim(),
+    brand: $('#cBrand').value.trim(),
+    kcal100: parseFloat($('#cKcal').value) || 0,
+    p: parseFloat($('#cP').value) || 0,
+    c: parseFloat($('#cC').value) || 0,
+    f: parseFloat($('#cF').value) || 0,
+    serving: parseFloat($('#cS').value) || 100
+  });
+};
+
+/* ---------- camera barcode scan (BarcodeDetector where supported) ---------- */
+async function startScan() {
+  const msg = $('#scanMsg');
+  if (!('BarcodeDetector' in window)) {
+    msg.textContent = 'Camera scanning is not supported in this browser. Use the Barcode tab and type the number.';
+    return;
+  }
+  try {
+    const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    const video = $('#video');
+    video.srcObject = stream;
+    await video.play();
+    msg.textContent = 'Point the camera at the barcode.';
+    scanTimer = setInterval(async () => {
+      try {
+        const codes = await detector.detect(video);
+        if (codes.length) {
+          stopScan();
+          msg.textContent = 'Found ' + codes[0].rawValue + ', looking it up…';
+          pickOrFail(codes[0].rawValue);
+        }
+      } catch (e) {}
+    }, 400);
+  } catch (err) {
+    msg.textContent = 'Camera unavailable (' + err.name + '). Use the Barcode tab instead.';
+    stopScan();
+  }
+}
+
+async function pickOrFail(code) {
+  try { pickProduct(await lookupCode(code)); }
+  catch (err) {
+    $('#scanMsg').textContent = err.message;
+    toast(err.message);
+  }
+}
+
+function stopScan() {
+  clearInterval(scanTimer); scanTimer = null;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const v = $('#video');
+  if (v) v.srcObject = null;
+}
+
+$('#scanStart').onclick = startScan;
+
+/* ---------- date nav, goal, fab ---------- */
+$('#prev').onclick = () => shift(-1);
+$('#next').onclick = () => shift(1);
+$('#fab').onclick = () => openAdd(addMeal);
+
+const settings = $('#settings');
+$('#openSettings').onclick = () => { $('#goalInput').value = db.goal; settings.showModal(); };
+$('#closeSettings').onclick = () => settings.close();
+$('#saveGoal').onclick = () => {
+  const g = parseInt($('#goalInput').value, 10);
+  if (!(g >= 500)) return toast('Goal must be at least 500 kcal');
+  db.goal = g; save(); render(); settings.close();
+};
+
+render();
+$('#history').scrollLeft = 1e9; // start with today in view
+</script>
+</body>
+</html>
