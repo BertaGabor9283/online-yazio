@@ -9,7 +9,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d2a22'/%3E%3Ccircle cx='32' cy='32' r='21' fill='%23e4572e'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%23f6f3ec'/%3E%3C/svg%3E">
 <meta name="apple-mobile-web-app-title" content="Plate Log">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
 <style>
 :root{
   --bg:#f6f3ec; --card:#ffffff; --ink:#1d2a22; --muted:#6b776f; --line:#e4e0d6;
@@ -63,6 +63,10 @@ button{cursor:pointer}
 .icon{border:0;background:transparent;font-size:20px;width:32px;height:32px;border-radius:8px;color:var(--muted)}
 .ghost{background:transparent;border:1px dashed #cfc9bb;border-radius:10px;padding:9px 12px;width:100%;color:var(--muted);margin-top:6px}
 .empty{color:var(--muted);text-align:center;padding:40px 0;font-size:14px}
+
+/* camera feed */
+#reader{position:relative;width:100%;aspect-ratio:4/3;background:#111;border-radius:12px;overflow:hidden}
+#reader video,#reader canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 
 /* history strip */
 .sec-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:18px 2px 8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
@@ -609,20 +613,13 @@ $('#customForm').onsubmit = e => {
   });
 };
 
-/* ---------- camera barcode scan (BarcodeDetector where supported) ---------- */
-// html5-qrcode reads the camera itself and works on iPhone Safari as well as Android Chrome,
-// unlike the BarcodeDetector API, which iPhone does not support.
-let scanner = null;
-function scanFormats() {
-  return [
-    Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
-    Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E
-  ];
-}
+/* ---------- camera barcode scan (Quagga2, a barcode-specific reader that works on iPhone and Android) ---------- */
+let scanning = false, scanHint = null;
+const SCAN_READERS = ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'];
 
-async function startScan() {
+function startScan() {
   const msg = $('#scanMsg');
-  if (typeof Html5Qrcode === 'undefined') {
+  if (typeof Quagga === 'undefined') {
     msg.textContent = 'The scanner could not load. Check your connection, or use the Barcode tab.';
     return;
   }
@@ -630,29 +627,41 @@ async function startScan() {
     msg.textContent = 'The camera only works on an https:// address. Open the GitHub Pages link.';
     return;
   }
-  if (scanner) return;
-  scanner = new Html5Qrcode('reader', { formatsToSupport: scanFormats(), verbose: false, useBarCodeDetectorIfSupported: true });
+  if (scanning) return;
+  scanning = true;
   msg.textContent = 'Starting camera…';
-  try {
-    await scanner.start(
-      { facingMode: 'environment' },
-      {
-        fps: 10,
-        disableFlip: true,
-        // Higher resolution is what lets the decoder read the thin lines of a 1D barcode.
-        videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-      },
-      onScanned,
-      () => {} // frames without a code are ignored
-    );
-    msg.textContent = 'Scanning. Hold the barcode 10–20 cm from the camera, in good light, and keep it flat and steady.';
-  } catch (err) {
-    msg.textContent = cameraError(err);
-    await stopScan();
-  }
+  Quagga.init({
+    inputStream: {
+      name: 'Live',
+      type: 'LiveStream',
+      target: $('#reader'),
+      constraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      // Only read the middle band of the picture, where the barcode is held.
+      area: { top: '15%', right: '5%', bottom: '15%', left: '5%' }
+    },
+    locator: { patchSize: 'medium', halfSample: false },
+    numOfWorkers: 0,
+    frequency: 10,
+    decoder: { readers: SCAN_READERS, multiple: false }
+  }, err => {
+    if (err) {
+      scanning = false;
+      msg.textContent = cameraError(err);
+      return;
+    }
+    Quagga.onDetected(onDetected);
+    Quagga.start();
+    msg.textContent = 'Scanning. Hold the barcode 10–20 cm away, flat, in good light.';
+    // If nothing reads after a while, say what to change.
+    scanHint = setTimeout(() => {
+      if (scanning) msg.textContent = 'Still no code. Move closer or farther, keep it flat, add light, or type the number in the Barcode tab.';
+    }, 12000);
+  });
 }
 
-function onScanned(code) {
+function onDetected(result) {
+  const code = result && result.codeResult && result.codeResult.code;
+  if (!scanning || !code) return;
   stopScan();
   $('#scanMsg').textContent = 'Found ' + code + ', looking it up…';
   pickOrFail(code);
@@ -676,11 +685,13 @@ async function pickOrFail(code) {
   }
 }
 
-async function stopScan() {
-  if (!scanner) return;
-  const s = scanner;
-  scanner = null;
-  try { if (s.isScanning) await s.stop(); s.clear(); } catch (e) {}
+function stopScan() {
+  clearTimeout(scanHint); scanHint = null;
+  if (!scanning) return;
+  scanning = false;
+  try { Quagga.offDetected(onDetected); Quagga.stop(); } catch (e) {}
+  const t = $('#reader');
+  if (t) t.replaceChildren(); // remove the camera feed so the next start is clean
 }
 
 $('#scanStart').onclick = startScan;
