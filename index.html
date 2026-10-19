@@ -482,20 +482,98 @@ async function lookupCode(code) {
   throw new Error('Nincs meg az adatbázisban. Add hozzá az Egyéni fülön.');
 }
 
-// Hungarian results first (Hungarian site, Hungarian language, Hungary country filter),
-// then the world database with the same filters as a fallback.
-async function searchProducts(q) {
-  const query = '&action=process&json=1&page_size=25&lc=hu&cc=hu&fields=' + PRODUCT_FIELDS +
-    '&search_simple=1&search_terms=' + encodeURIComponent(q);
-  for (const host of ['hu.openfoodfacts.org', 'world.openfoodfacts.org']) {
-    try {
-      const res = await fetch('https://' + host + '/cgi/search.pl?' + query.slice(1));
-      const j = await res.json();
-      const list = (j.products || []).map(toProduct).filter(p => p.kcal100 > 0);
-      if (list.length) return list;
-    } catch (e) { /* try the next source */ }
+// Lowercase, strip accents (á→a, ő→o), and turn punctuation into spaces, so "Kóla" matches "kola".
+function fold(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Character-trigram similarity (0..1): forgiving of typos and missing letters.
+function similarity(a, b) {
+  const grams = s => { const p = '  ' + s + ' ', set = new Set(); for (let i = 0; i < p.length - 2; i++) set.add(p.slice(i, i + 3)); return set; };
+  const A = grams(a), B = grams(b);
+  if (!A.size || !B.size) return 0;
+  let common = 0;
+  for (const g of A) if (B.has(g)) common++;
+  return 2 * common / (A.size + B.size);
+}
+
+// How well a product matches the query: each query word is matched against the product's
+// words, exactly, as a prefix (so "kol" finds "kola"), or by typo tolerance. Returns 0..1.
+function matchScore(p, tokens) {
+  const words = fold(p.name + ' ' + p.brand).split(' ').filter(Boolean);
+  if (!tokens.length || !words.length) return 0;
+  let total = 0;
+  for (const t of tokens) {
+    let best = 0;
+    for (const w of words) {
+      const sc = w === t ? 1 : (w.startsWith(t) || t.startsWith(w)) ? 0.9 : similarity(t, w);
+      if (sc > best) best = sc;
+    }
+    total += best;
   }
-  return [];
+  return total / tokens.length;
+}
+
+// Hungarian results first (Hungarian site, Hungarian language, Hungary country filter),
+// then the world database. If the full query finds little, also search the longest word alone.
+async function searchProducts(q) {
+  const tokens = fold(q).split(' ').filter(Boolean);
+  const terms = [q];
+  const longest = tokens.slice().sort((a, b) => b.length - a.length)[0];
+  if (longest && tokens.length > 1) terms.push(longest);
+
+  const found = new Map();
+  for (const term of terms) {
+    for (const host of ['hu.openfoodfacts.org', 'world.openfoodfacts.org']) {
+      try {
+        const url = 'https://' + host + '/cgi/search.pl?action=process&json=1&page_size=40&lc=hu&cc=hu&fields=' +
+          PRODUCT_FIELDS + '&search_simple=1&search_terms=' + encodeURIComponent(term);
+        const j = await (await fetch(url)).json();
+        for (const x of (j.products || [])) {
+          const p = toProduct(x);
+          const key = p.code || p.name + '|' + p.brand;
+          if (p.kcal100 > 0 && !found.has(key)) found.set(key, p);
+        }
+      } catch (e) { /* try the next source */ }
+    }
+    if (found.size >= 15) break;
+  }
+
+  const ranked = [...found.values()]
+    .map(p => ({ p, s: matchScore(p, tokens) }))
+    .sort((a, b) => b.s - a.s);
+  const good = ranked.filter(x => x.s >= 0.5);
+  // Show close matches if nothing matches well.
+  return (good.length ? good : ranked.slice(0, 10)).slice(0, 25).map(x => x.p);
+}
+
+let searchTimer = null, searchSeq = 0;
+
+async function runSearch(q) {
+  if (!q) return;
+  const seq = ++searchSeq;
+  const box = $('#results');
+  box.replaceChildren(el('p', { className: 'meta', textContent: 'Searching…', style: 'padding:10px 2px' }));
+  try {
+    const list = await searchProducts(q);
+    if (seq !== searchSeq) return; // a newer search has started
+    box.replaceChildren();
+    if (!list.length) {
+      box.append(el('p', { className: 'meta', textContent: 'No matches. Try a shorter name or another word.', style: 'padding:10px 2px' }));
+      return;
+    }
+    for (const p of list) {
+      box.append(el('button', { className: 'result', onclick: () => pickProduct(p) }, [
+        el('span', { className: 'n', textContent: p.name + (p.brand ? ' · ' + p.brand : '') }),
+        el('span', { className: 'k', textContent: r(p.kcal100) + ' kcal/100g' })
+      ]));
+    }
+  } catch (err) {
+    if (seq === searchSeq) {
+      box.replaceChildren(el('p', { className: 'meta', textContent: 'Search failed. Check your connection.', style: 'padding:10px 2px' }));
+    }
+  }
 }
 
 $('#codeForm').onsubmit = async e => {
@@ -504,25 +582,17 @@ $('#codeForm').onsubmit = async e => {
   catch (err) { toast(err.message || 'Lookup failed'); }
 };
 
-$('#searchForm').onsubmit = async e => {
-  e.preventDefault();
+// Search as you type (after a short pause), and on Enter/Search.
+$('#searchInput').addEventListener('input', () => {
+  clearTimeout(searchTimer);
   const q = $('#searchInput').value.trim();
-  if (!q) return;
-  const box = $('#results');
-  box.replaceChildren(el('p', { className: 'meta', textContent: 'Searching…', style: 'padding:10px 2px' }));
-  try {
-    const list = await searchProducts(q);
-    box.replaceChildren();
-    if (!list.length) box.append(el('p', { className: 'meta', textContent: 'No matches with calorie data.', style: 'padding:10px 2px' }));
-    for (const p of list) {
-      box.append(el('button', { className: 'result', onclick: () => pickProduct(p) }, [
-        el('span', { className: 'n', textContent: p.name + (p.brand ? ' · ' + p.brand : '') }),
-        el('span', { className: 'k', textContent: r(p.kcal100) + ' kcal/100g' })
-      ]));
-    }
-  } catch (err) {
-    box.replaceChildren(el('p', { className: 'meta', textContent: 'Search failed. Check your connection.', style: 'padding:10px 2px' }));
-  }
+  if (q.length < 3) { searchSeq++; $('#results').replaceChildren(); return; }
+  searchTimer = setTimeout(() => runSearch(q), 400);
+});
+$('#searchForm').onsubmit = e => {
+  e.preventDefault();
+  clearTimeout(searchTimer);
+  runSearch($('#searchInput').value.trim());
 };
 
 $('#customForm').onsubmit = e => {
