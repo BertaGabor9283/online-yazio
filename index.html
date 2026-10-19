@@ -116,6 +116,20 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
   background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;transition:.25s;pointer-events:none;max-width:90%}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 [hidden]{display:none!important}
+/* layout: one column on phones; two columns on wide screens */
+.layout{display:block}
+.col-a,.col-b{min-width:0}
+@media (min-width:900px){
+  body{padding-bottom:40px}
+  main{max-width:1120px}
+  .layout{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:28px;align-items:start}
+  .col-a{position:sticky;top:20px}
+  .col-b .meal:first-child{margin-top:0}
+  .fab{left:auto;right:max(24px,env(safe-area-inset-right,0px));transform:none;bottom:24px}
+  .toast{left:auto;right:24px;transform:none;bottom:24px}
+  .toast.on{transform:none}
+  .sheet{inset:50% auto auto 50%;transform:translate(-50%,-50%);width:min(560px,92vw);max-height:88vh;border-radius:20px}
+}
 </style>
 </head>
 <body>
@@ -125,6 +139,8 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
     <button class="ghost" id="openSettings" style="width:auto;margin:0;padding:7px 12px">Goal</button>
   </div>
 
+  <div class="layout">
+  <div class="col-a">
   <div class="datebar">
     <button class="nav" id="prev" aria-label="Previous day">‹</button>
     <div class="date" id="date"></div>
@@ -145,7 +161,11 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
   <div class="sec-h"><span>Last 30 days</span><span style="text-transform:none;letter-spacing:0;font-weight:400">tap a day to open it</span></div>
   <div class="history" id="history"></div>
 
+  </div>
+  <div class="col-b">
   <div id="meals"></div>
+  </div>
+  </div>
   <p class="note">Product data: Open Food Facts contributors, ODbL. Values are per 100 g and scaled to your amount.</p>
 </main>
 
