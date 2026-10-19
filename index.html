@@ -456,7 +456,7 @@ function toProduct(x) {
   if (kcal == null && n['energy_100g'] != null) kcal = n['energy_100g'] / 4.184; // kJ -> kcal
   return {
     code: x.code || '',
-    name: x.product_name || 'Unnamed product',
+    name: x.product_name_hu || x.product_name || 'Névtelen termék',
     brand: (x.brands || '').split(',')[0].trim(),
     kcal100: +kcal || 0,
     p: +n.proteins_100g || 0,
@@ -466,21 +466,36 @@ function toProduct(x) {
   };
 }
 
+const PRODUCT_FIELDS = 'code,product_name,product_name_hu,brands,serving_size,nutriments';
+
 async function lookupCode(code) {
   const clean = String(code).replace(/\D/g, '');
-  if (clean.length < 8) throw new Error('That does not look like a barcode');
-  const res = await fetch('https://world.openfoodfacts.org/api/v2/product/' + clean + '.json?fields=code,product_name,brands,serving_size,nutriments');
-  const j = await res.json();
-  if (j.status !== 1 || !j.product) throw new Error('Not found. Add it under Custom.');
-  return toProduct(j.product);
+  if (clean.length < 8) throw new Error('Ez nem tűnik vonalkódnak');
+  // Hungarian site first, then the world database.
+  for (const host of ['hu.openfoodfacts.org', 'world.openfoodfacts.org']) {
+    try {
+      const res = await fetch('https://' + host + '/api/v2/product/' + clean + '.json?fields=' + PRODUCT_FIELDS);
+      const j = await res.json();
+      if (j.status === 1 && j.product) return toProduct(j.product);
+    } catch (e) { /* try the next source */ }
+  }
+  throw new Error('Nincs meg az adatbázisban. Add hozzá az Egyéni fülön.');
 }
 
+// Hungarian results first (Hungarian site, Hungarian language, Hungary country filter),
+// then the world database with the same filters as a fallback.
 async function searchProducts(q) {
-  const url = 'https://world.openfoodfacts.org/cgi/search.pl?search_simple=1&action=process&json=1&page_size=25' +
-    '&fields=code,product_name,brands,serving_size,nutriments&search_terms=' + encodeURIComponent(q);
-  const res = await fetch(url);
-  const j = await res.json();
-  return (j.products || []).map(toProduct).filter(p => p.kcal100 > 0);
+  const query = '&action=process&json=1&page_size=25&lc=hu&cc=hu&fields=' + PRODUCT_FIELDS +
+    '&search_simple=1&search_terms=' + encodeURIComponent(q);
+  for (const host of ['hu.openfoodfacts.org', 'world.openfoodfacts.org']) {
+    try {
+      const res = await fetch('https://' + host + '/cgi/search.pl?' + query.slice(1));
+      const j = await res.json();
+      const list = (j.products || []).map(toProduct).filter(p => p.kcal100 > 0);
+      if (list.length) return list;
+    } catch (e) { /* try the next source */ }
+  }
+  return [];
 }
 
 $('#codeForm').onsubmit = async e => {
