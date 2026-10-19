@@ -223,6 +223,7 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
           <label>Fat g<input id="cF" type="number" min="0" step="any" value="0"></label>
           <label>Serving g<input id="cS" type="number" min="1" step="any" value="100"></label>
         </div>
+        <label>Measured in<select id="cUnit"><option value="g">Solid (grams)</option><option value="ml">Liquid (ml)</option></select></label>
         <button class="primary" type="submit">Continue</button>
       </form>
     </div>
@@ -231,7 +232,7 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
   <div id="stepAmount" hidden>
     <div class="name" id="pName" style="font-size:17px"></div>
     <div class="meta" id="pMeta" style="margin-bottom:6px"></div>
-    <label>Amount (g)<input id="grams" type="number" inputmode="decimal" min="1" step="any"></label>
+    <label>Amount<div style="display:flex;gap:8px"><input id="grams" type="number" inputmode="decimal" min="1" step="any" style="flex:1"><select id="unitSel" style="width:auto"><option value="g">g (solid)</option><option value="ml">ml (liquid)</option></select></div></label>
     <label>Meal<select id="mealSel"></select></label>
     <p class="meta" id="preview" style="margin:12px 0 0"></p>
     <button class="primary" id="addBtn">Add to diary</button>
@@ -407,7 +408,7 @@ function entryRow(e) {
   return el('div', { className: 'row' }, [
     el('div', { className: 'row-main' }, [
       el('div', { className: 'name', textContent: e.name }),
-      el('div', { className: 'meta', textContent: (e.brand ? e.brand + ' · ' : '') + e.grams + ' g · P ' + r(e.p * f) + ' C ' + r(e.c * f) + ' F ' + r(e.f * f) })
+      el('div', { className: 'meta', textContent: (e.brand ? e.brand + ' · ' : '') + e.grams + ' ' + (e.unit || 'g') + ' · P ' + r(e.p * f) + ' C ' + r(e.c * f) + ' F ' + r(e.f * f) })
     ]),
     el('div', { className: 'kc', textContent: r(e.kcal100 * f) }),
     el('button', {
@@ -467,6 +468,7 @@ function pickProduct(p) {
   stopScan();
   $('#pName').textContent = p.name;
   $('#pMeta').textContent = (p.brand ? p.brand + ' · ' : '') + 'per 100 g: ' + r(p.kcal100) + ' kcal · P ' + r(p.p) + ' C ' + r(p.c) + ' F ' + r(p.f);
+  $('#unitSel').value = p.liquid ? 'ml' : 'g';
   $('#grams').value = p.serving || 100;
   const sel = $('#mealSel');
   sel.replaceChildren(...MEALS.map(m => el('option', { value: m, textContent: m, selected: m === addMeal })));
@@ -494,7 +496,7 @@ $('#addBtn').onclick = () => {
     meal: $('#mealSel').value,
     name: pending.name, brand: pending.brand,
     kcal100: pending.kcal100, p: pending.p, c: pending.c, f: pending.f,
-    grams: g
+    grams: g, unit: $('#unitSel').value
   });
   save(); render();
   sheet.close();
@@ -514,11 +516,13 @@ function toProduct(x) {
     p: +n.proteins_100g || 0,
     c: +n.carbohydrates_100g || 0,
     f: +n.fat_100g || 0,
-    serving: parseFloat(x.serving_size) || 0
+    serving: parseFloat(x.serving_size) || 0,
+    // Liquids are measured in ml, solids in grams. Taken from the package size.
+    liquid: /\b(ml|cl|l)\b/i.test((x.serving_size || '') + ' ' + (x.quantity || ''))
   };
 }
 
-const PRODUCT_FIELDS = 'code,product_name,product_name_hu,brands,serving_size,nutriments';
+const PRODUCT_FIELDS = 'code,product_name,product_name_hu,brands,quantity,serving_size,nutriments';
 
 async function lookupCode(code) {
   const clean = String(code).replace(/\D/g, '');
@@ -657,7 +661,8 @@ $('#customForm').onsubmit = e => {
     p: parseFloat($('#cP').value) || 0,
     c: parseFloat($('#cC').value) || 0,
     f: parseFloat($('#cF').value) || 0,
-    serving: parseFloat($('#cS').value) || 100
+    serving: parseFloat($('#cS').value) || 100,
+    liquid: $('#cUnit').value === 'ml'
   });
 };
 
