@@ -33,8 +33,9 @@ button{cursor:pointer}
 .meta{color:var(--muted);font-size:13px}
 
 /* header */
-.top{display:flex;align-items:center;justify-content:space-between;padding:18px 0 8px}
+.top{display:flex;align-items:center;justify-content:space-between;padding:18px 0 4px}
 .brand{font-size:20px;font-weight:700;letter-spacing:-.01em;margin:0}
+.syncline{margin:0 0 8px;font-size:12px;color:var(--muted)}
 .datebar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 14px}
 .datebar .date{font-weight:600;text-align:center;flex:1}
 .nav{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:var(--card)}
@@ -142,6 +143,7 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
       <button class="ghost" id="openSettings" style="width:auto;margin:0;padding:7px 12px">Goal</button>
     </div>
   </div>
+  <p class="syncline" id="syncLine"></p>
 
   <div class="layout">
   <div class="col-a">
@@ -247,15 +249,16 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
     <button class="icon" id="syncClose" aria-label="Close">×</button>
   </div>
   <div id="syncSignedOut">
-    <p class="meta" style="margin:0 0 8px">Enter your email. We send a sign-in link. Open it on this device, and your diary will stay in sync with your other devices.</p>
+    <p class="meta" style="margin:0 0 8px">Enter your email and we send a sign-in link. Open it once on each device. After that, every device loads your diary from the cloud, so it is the same everywhere.</p>
     <form id="syncForm">
       <label>Email<input id="syncEmail" type="email" required autocomplete="email"></label>
       <button class="primary" type="submit">Send sign-in link</button>
     </form>
   </div>
   <div id="syncSignedIn" hidden>
-    <p class="meta" style="margin:0 0 8px">Signed in as <b id="syncWho"></b>. Changes sync automatically.</p>
-    <button class="ghost" id="syncOut" style="margin-top:12px">Sign out on this device</button>
+    <p class="meta" style="margin:0 0 8px">Signed in as <b id="syncWho"></b>. Changes sync on their own. Use Sync now to send them straight away.</p>
+    <button class="primary" id="syncNow">Sync now</button>
+    <button class="ghost" id="syncOut">Sign out on this device</button>
   </div>
   <p class="meta" id="syncStatus" style="margin-top:12px"></p>
 </dialog>
@@ -272,6 +275,9 @@ video{width:100%;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:
 
 <script>
 const KEY = 'platelog.v1';
+const OUTBOX_KEY = 'platelog.outbox.v1';
+const OWNER_KEY = 'platelog.owner';
+const SEEDED_KEY = 'platelog.seeded.';
 const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
 const HISTORY_DAYS = 30; // days kept, today included
 const SUPABASE_URL = 'https://nhkygkbhiuimkrjmnssg.supabase.co';
@@ -280,32 +286,110 @@ const $ = s => document.querySelector(s);
 const r = x => Math.round(x);
 
 let db = load();
+let outbox = loadOutbox();
 let viewDate = today();
 let addMeal = 'Lunch';
-let pending = null;
+let pending = null; // the product being added
 let stream = null, scanTimer = null;
 
-/* ---------- storage ---------- */
+/* ---------- local storage ---------- */
+// The diary is kept on this device so the page works offline. The cloud copy is the one
+// that matters across devices. Changes not yet sent to the cloud wait in the outbox.
+function emptyDb() { return { goal: 2000, goalUpdatedAt: 0, days: {} }; }
+function emptyOutbox() { return { upserts: {}, deletes: {}, goal: false }; }
+
 function load() {
+  const d = emptyDb();
   let v = null;
   try { v = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
-  const d = (v && v.days && v.goal) ? v : { goal: 2000, days: {}, updatedAt: 0 };
+  if (v) {
+    if (v.goal) d.goal = v.goal;
+    if (v.goalUpdatedAt !== undefined) d.goalUpdatedAt = v.goalUpdatedAt;
+    else if (v.goal && v.goal !== 2000) d.goalUpdatedAt = Date.now(); // a goal set by the earlier version
+    if (v.days) {
+      // Entries saved by the earlier version have no id or timestamp, so give them both.
+      for (const [day, info] of Object.entries(v.days)) {
+        for (const e of (info.entries || [])) {
+          place(d, { ...e, day, id: e.id || newId(), unit: e.unit || 'g', updatedAt: e.updatedAt || Date.now() });
+        }
+      }
+    }
+  }
   prune(d);
   return d;
 }
-// Keep only the last HISTORY_DAYS days (today included); older days are dropped.
-function prune(d) {
-  const cutoff = oldestDay();
-  for (const k of Object.keys(d.days)) if (k < cutoff) delete d.days[k];
+
+function loadOutbox() {
+  try {
+    const v = JSON.parse(localStorage.getItem(OUTBOX_KEY));
+    if (v && v.upserts) return { ...emptyOutbox(), ...v };
+  } catch (e) {}
+  return emptyOutbox();
 }
+
+function persist() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(db));
+    localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox));
+  } catch (e) { toast('Could not save on this device'); }
+}
+
+// Keep only the last HISTORY_DAYS days (today included); older days are dropped.
+function prune(state) {
+  const cutoff = oldestDay();
+  for (const k of Object.keys(state.days)) if (k < cutoff) delete state.days[k];
+}
+
 function save() {
   prune(db);
-  db.updatedAt = Date.now(); // used to decide which copy is newer when syncing
-  try { localStorage.setItem(KEY, JSON.stringify(db)); }
-  catch (e) { toast('Could not save on this device'); }
-  pushSoon();
+  persist();
+  scheduleSync();
 }
-function day(d) { return db.days[d] || (db.days[d] = { entries: [] }); }
+
+function place(state, e) {
+  if (!state.days[e.day]) state.days[e.day] = { entries: [] };
+  state.days[e.day].entries.push(e);
+}
+function removeFrom(state, id) {
+  for (const d of Object.values(state.days)) {
+    const i = d.entries.findIndex(e => e.id === id);
+    if (i >= 0) d.entries.splice(i, 1);
+  }
+}
+function findEntry(id) {
+  for (const d of Object.values(db.days)) {
+    const hit = d.entries.find(e => e.id === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+function allEntries() { return Object.values(db.days).flatMap(d => d.entries); }
+function dayEntries(d) { return (db.days[d] && db.days[d].entries) || []; }
+function newId() {
+  return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+// Local changes: each one is saved on this device and queued for the cloud.
+function addEntry(fields) {
+  const e = { id: newId(), day: viewDate, ...fields, updatedAt: Date.now() };
+  place(db, e);
+  outbox.upserts[e.id] = true;
+  save();
+}
+function removeEntry(id) {
+  const e = findEntry(id);
+  if (!e) return;
+  removeFrom(db, id);
+  delete outbox.upserts[id];
+  outbox.deletes[id] = { ...e, updatedAt: Date.now() };
+  save();
+}
+function setGoal(g) {
+  db.goal = g;
+  db.goalUpdatedAt = Date.now();
+  outbox.goal = true;
+  save();
+}
 
 /* ---------- dates ---------- */
 function iso(d) {
@@ -344,7 +428,7 @@ function totals(entries) {
 /* ---------- render ---------- */
 function render() {
   $('#date').textContent = dateLabel(viewDate);
-  const entries = day(viewDate).entries;
+  const entries = dayEntries(viewDate);
   const t = totals(entries);
   const goal = db.goal;
   $('#kcal').textContent = r(t.kcal);
@@ -385,7 +469,7 @@ function renderHistory() {
   wrap.replaceChildren();
   for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
     const key = isoOffset(-i);
-    const entries = db.days[key] ? db.days[key].entries : [];
+    const entries = dayEntries(key);
     const kcal = r(totals(entries).kcal);
     const state = !entries.length ? '' : kcal > db.goal ? 'over' : 'ok';
     const d = new Date(key + 'T12:00');
@@ -413,11 +497,7 @@ function entryRow(e) {
     el('div', { className: 'kc', textContent: r(e.kcal100 * f) }),
     el('button', {
       className: 'icon', textContent: '×', title: 'Remove', 'aria-label': 'Remove ' + e.name,
-      onclick: () => {
-        const d = day(viewDate);
-        d.entries = d.entries.filter(x => x.id !== e.id);
-        save(); render();
-      }
+      onclick: () => { removeEntry(e.id); render(); }
     })
   ]);
 }
@@ -490,15 +570,14 @@ sheet.addEventListener('close', stopScan);
 
 $('#addBtn').onclick = () => {
   const g = parseFloat($('#grams').value);
-  if (!(g > 0)) return toast('Enter an amount in grams');
-  day(viewDate).entries.push({
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+  if (!(g > 0)) return toast('Enter an amount');
+  addEntry({
     meal: $('#mealSel').value,
-    name: pending.name, brand: pending.brand,
+    name: pending.name, brand: pending.brand || '',
     kcal100: pending.kcal100, p: pending.p, c: pending.c, f: pending.f,
     grams: g, unit: $('#unitSel').value
   });
-  save(); render();
+  render();
   sheet.close();
   toast('Added to ' + $('#mealSel').value.toLowerCase());
 };
@@ -750,74 +829,220 @@ function stopScan() {
 $('#scanStart').onclick = startScan;
 
 /* ---------- sync across devices (Supabase) ---------- */
-// Whole-diary sync: the newest copy wins. Entries are saved on this device first, so the app works offline.
+// The cloud is the source of truth. Each entry syncs on its own, so changes made on
+// different devices merge instead of overwriting each other. The server keeps the newer
+// copy of any entry, so an old copy from an offline device cannot overwrite newer data.
 const SB = (typeof supabase !== 'undefined')
   ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
   : null;
-let user = null, pushTimer = null;
-const syncDlg = $('#syncDlg');
 
-function setSyncStatus(t) { $('#syncStatus').textContent = t; }
+let currentUser = null;
+let syncing = false, syncAgain = false, syncTimer = null;
+let lastSynced = 0, lastError = '';
 
-function pushSoon() {
-  if (!SB || !user) return;
-  clearTimeout(pushTimer);
-  pushTimer = setTimeout(pushNow, 800);
-}
-
-async function pushNow() {
-  if (!SB || !user) return;
-  const { error } = await SB.from('diaries').upsert({ user_id: user.id, data: db, updated_at: new Date().toISOString() });
-  setSyncStatus(error ? 'Sync failed: ' + error.message : 'Synced just now');
-}
-
-async function pullOrPush() {
-  setSyncStatus('Syncing…');
-  const { data, error } = await SB.from('diaries').select('data').eq('user_id', user.id).maybeSingle();
-  if (error) { setSyncStatus('Sync failed: ' + error.message); return; }
-  const remote = data && data.data;
-  if (remote && remote.days && (remote.updatedAt || 0) > (db.updatedAt || 0)) {
-    db = remote;
-    prune(db);
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {}
-    render();
-    setSyncStatus('Loaded your diary from the cloud');
-  } else {
-    await pushNow();
-  }
+function timeLabel(ts) {
+  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 function updateSyncUI() {
-  $('#syncBtn').textContent = user ? 'Synced' : 'Sync';
-  $('#syncSignedOut').hidden = !!user;
-  $('#syncSignedIn').hidden = !user;
-  if (user) $('#syncWho').textContent = user.email || '';
+  let text, label = 'Sync';
+  if (!SB) {
+    text = 'Sync is unavailable right now. Entries are kept on this device.';
+  } else if (!currentUser) {
+    text = 'This device only. Sign in to keep your diary on all your devices.';
+  } else if (!navigator.onLine) {
+    text = 'Offline. Changes are kept here and sync when you reconnect.';
+    label = 'Offline';
+  } else if (syncing) {
+    text = 'Syncing…';
+  } else if (lastError) {
+    text = 'Sync failed: ' + lastError + '. Changes are kept and will be retried.';
+    label = 'Sync !';
+  } else {
+    text = lastSynced ? 'Synced at ' + timeLabel(lastSynced) : 'Signed in. Syncing…';
+    label = 'Synced';
+  }
+  $('#syncLine').textContent = text;
+  $('#syncStatus').textContent = text;
+  $('#syncBtn').textContent = label;
+  $('#syncSignedOut').hidden = !!currentUser;
+  $('#syncSignedIn').hidden = !currentUser;
+  if (currentUser) $('#syncWho').textContent = currentUser.email || '';
+}
+
+function scheduleSync() {
+  if (!SB) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncNow, 800);
+}
+
+async function syncNow() {
+  if (!SB) return;
+  if (syncing) { syncAgain = true; return; }
+  const { data } = await SB.auth.getSession();
+  const session = data && data.session;
+  if (!session) { currentUser = null; updateSyncUI(); return; }
+  currentUser = session.user;
+  if (!navigator.onLine) { updateSyncUI(); return; }
+
+  syncing = true;
+  updateSyncUI();
+  try {
+    const uid = currentUser.id;
+    // Another account on this device must not inherit this device's diary.
+    const owner = localStorage.getItem(OWNER_KEY);
+    if (owner && owner !== uid) {
+      db = emptyDb();
+      outbox = emptyOutbox();
+      persist();
+    }
+    localStorage.setItem(OWNER_KEY, uid);
+
+    // First sync for this account: upload what this device already has. The server keeps
+    // whichever copy is newer, so this cannot overwrite data from another device.
+    if (!localStorage.getItem(SEEDED_KEY + uid)) {
+      for (const e of allEntries()) outbox.upserts[e.id] = true;
+      outbox.goal = true;
+    }
+
+    await pushOutbox(uid);
+    await pullRemote(uid);
+    localStorage.setItem(SEEDED_KEY + uid, '1');
+    lastSynced = Date.now();
+    lastError = '';
+  } catch (err) {
+    lastError = (err && err.message) || String(err);
+  } finally {
+    syncing = false;
+    updateSyncUI();
+    render();
+    if (syncAgain) { syncAgain = false; syncNow(); }
+  }
+}
+
+function toRow(uid, e, deleted) {
+  return {
+    user_id: uid, id: e.id, day: e.day, meal: e.meal, name: e.name || '', brand: e.brand || '',
+    kcal100: e.kcal100 || 0, p: e.p || 0, c: e.c || 0, f: e.f || 0, grams: e.grams || 0,
+    unit: e.unit || 'g', deleted, updated_ms: e.updatedAt
+  };
+}
+
+// Send queued changes. Anything that fails stays in the outbox and is retried next time.
+async function pushOutbox(uid) {
+  const rows = [];
+  const sent = { upserts: {}, deletes: {} };
+
+  for (const id of Object.keys(outbox.upserts)) {
+    const e = findEntry(id);
+    if (!e) { delete outbox.upserts[id]; continue; }
+    rows.push(toRow(uid, e, false));
+    sent.upserts[id] = e.updatedAt;
+  }
+  for (const [id, e] of Object.entries(outbox.deletes)) {
+    rows.push(toRow(uid, e, true));
+    sent.deletes[id] = e.updatedAt;
+  }
+
+  if (rows.length) {
+    const { error } = await SB.from('diary_entries').upsert(rows, { onConflict: 'user_id,id' });
+    if (error) throw error;
+    // Clear an entry from the outbox only if it has not changed while we were sending.
+    for (const id of Object.keys(sent.upserts)) {
+      const e = findEntry(id);
+      if (!e || e.updatedAt === sent.upserts[id]) delete outbox.upserts[id];
+    }
+    for (const id of Object.keys(sent.deletes)) {
+      if (outbox.deletes[id] && outbox.deletes[id].updatedAt === sent.deletes[id]) delete outbox.deletes[id];
+    }
+  }
+
+  if (outbox.goal) {
+    const goalAt = db.goalUpdatedAt;
+    const { error } = await SB.from('user_settings').upsert(
+      { user_id: uid, goal: db.goal, updated_ms: goalAt }, { onConflict: 'user_id' });
+    if (error) throw error;
+    if (db.goalUpdatedAt === goalAt) outbox.goal = false;
+  }
+  persist();
+}
+
+// Fetch the cloud copy and merge it: for each entry, the newer change wins.
+async function pullRemote(uid) {
+  const since = oldestDay();
+  const { data: rows, error } = await SB.from('diary_entries').select('*').gte('day', since);
+  if (error) throw error;
+  for (const row of rows || []) mergeRow(row);
+
+  const { data: s, error: sErr } = await SB.from('user_settings').select('goal,updated_ms').eq('user_id', uid).maybeSingle();
+  if (sErr) throw sErr;
+  if (s && Number(s.updated_ms) > db.goalUpdatedAt) {
+    db.goal = Number(s.goal);
+    db.goalUpdatedAt = Number(s.updated_ms);
+    outbox.goal = false;
+  }
+
+  // Entries older than the 30-day window are no longer needed in the cloud either.
+  const { error: dErr } = await SB.from('diary_entries').delete().lt('day', since);
+  if (dErr) throw dErr;
+
+  prune(db);
+  persist();
+}
+
+function mergeRow(row) {
+  const id = row.id;
+  const ms = Number(row.updated_ms);
+  if (outbox.deletes[id]) return; // this device has a newer delete waiting to be sent
+  const local = findEntry(id);
+  if (row.deleted) {
+    if (local && local.updatedAt <= ms) { removeFrom(db, id); delete outbox.upserts[id]; }
+    return;
+  }
+  if (local && local.updatedAt >= ms) return; // this device's copy is newer; it will be sent
+  removeFrom(db, id);
+  place(db, {
+    id, day: row.day, meal: row.meal, name: row.name, brand: row.brand || '',
+    kcal100: Number(row.kcal100), p: Number(row.p), c: Number(row.c), f: Number(row.f),
+    grams: Number(row.grams), unit: row.unit || 'g', updatedAt: ms
+  });
+  delete outbox.upserts[id];
 }
 
 if (SB) {
   SB.auth.onAuthStateChange((event, session) => {
-    user = session ? session.user : null;
-    updateSyncUI();
-    if (user && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) pullOrPush();
+    if (session && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) syncNow();
+    if (!session) { currentUser = null; updateSyncUI(); }
   });
+
   $('#syncForm').onsubmit = async e => {
     e.preventDefault();
     const email = $('#syncEmail').value.trim();
     if (!email) return;
-    setSyncStatus('Sending the sign-in link…');
-    const { error } = await SB.auth.signInWithOtp({ email, options: { emailRedirectTo: location.href.split('#')[0] } });
-    setSyncStatus(error ? 'Could not send: ' + error.message : 'Check your email and open the link on this device.');
+    $('#syncStatus').textContent = 'Sending the sign-in link…';
+    const { error } = await SB.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+    $('#syncStatus').textContent = error ? 'Could not send: ' + error.message : 'Check your email and open the link on this device.';
   };
+  $('#syncNow').onclick = () => syncNow();
   $('#syncOut').onclick = async () => {
+    await syncNow(); // send anything not yet saved to the cloud first
     await SB.auth.signOut();
-    setSyncStatus('Signed out. This device keeps its own copy.');
+    currentUser = null; lastSynced = 0; lastError = '';
+    updateSyncUI();
   };
 } else {
   $('#syncBtn').disabled = true;
-  $('#syncBtn').textContent = 'Sync off';
 }
-$('#syncBtn').onclick = () => syncDlg.showModal();
+$('#syncBtn').onclick = () => { updateSyncUI(); syncDlg.showModal(); };
 $('#syncClose').onclick = () => syncDlg.close();
+const syncDlg = $('#syncDlg');
+
+// Keep devices in step without reloading: when the page is shown again, when the
+// connection returns, and every minute while the page is open.
+window.addEventListener('online', () => { updateSyncUI(); syncNow(); });
+window.addEventListener('offline', updateSyncUI);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60000);
 
 /* ---------- date nav, goal, fab ---------- */
 $('#prev').onclick = () => shift(-1);
@@ -830,9 +1055,12 @@ $('#closeSettings').onclick = () => settings.close();
 $('#saveGoal').onclick = () => {
   const g = parseInt($('#goalInput').value, 10);
   if (!(g >= 500)) return toast('Goal must be at least 500 kcal');
-  db.goal = g; save(); render(); settings.close();
+  setGoal(g);
+  render();
+  settings.close();
 };
 
+updateSyncUI();
 render();
 $('#history').scrollLeft = 1e9; // start with today in view
 </script>
